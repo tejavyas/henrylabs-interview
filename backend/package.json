@@ -1,0 +1,22 @@
+{
+  "name": "backend",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx --watch index.ts"
+  },
+  "devDependencies": {
+    "supabase": "^2.15.0",
+    "tsx": "^4.21.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@henrylabs-interview/payments": "^0.2.19",
+    "@supabase/supabase-js": "^2.47.0",
+    "dotenv": "^16.4.5"
+  }
+}
