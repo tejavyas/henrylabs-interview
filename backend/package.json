@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "start": "tsx index.ts",
-    "dev": "tsx --watch index.ts"
+    "dev": "tsx --watch index.ts",
+    "worker": "tsx worker.ts"
   },
   "devDependencies": {
     "supabase": "^2.15.0",

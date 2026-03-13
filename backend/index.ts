@@ -5,6 +5,11 @@ import { products } from "./products";
 import { config } from "./config";
 import { getSupabase } from "./lib/supabase";
 import { writeOrder } from "./services/orders";
+import {
+  writeOrderTracking,
+  updateOrderTracking,
+  readOrderTrackingByTrackingId,
+} from "./services/orderTracking";
 import { getNumberEncryption } from "./utils/encryption";
 
 console.log("Backend starting...");
@@ -129,6 +134,7 @@ async function handleRequest(req: Request): Promise<Response> {
           amount: Math.round(amount),
           currency: currency.trim(),
         });
+        await writeOrderTracking({ order_id: order.order_id, status: "queued" });
         // Enqueue optimistically: don't block the response on queue write
         getSupabase()
           .rpc("send_to_payment_queue", { p_order_id: order.order_id })
@@ -319,86 +325,63 @@ async function handleRequest(req: Request): Promise<Response> {
     // ── POST /api/webhooks ──
     if (path === "/api/webhooks" && req.method === "POST") {
       try {
-        const event = (await req.json()) as {
+        const body = (await req.json()) as {
           uid: string;
           type: string;
           createdAt: number;
           data: Record<string, any>;
         };
-        console.log("Webhook received:", event.type, event.uid);
+        // Log full payload to verify field names (data._reqId, data.data?.checkoutId, etc.)
+        console.log("[webhook]", JSON.stringify(body, null, 2));
 
-        const { type, data } = event;
-
-        // Match webhook to a tracked checkout by stable keys from payload
-        if (type === "checkout.create.success" && data?.checkoutId) {
-          const trackingId =
-            data.trackingId ?? data.requestId ?? data._reqId;
-          const record = trackingId
-            ? checkoutStore.get(trackingId)
-            : null;
-          if (record && record.status === "pending" && !record.checkoutId) {
-            record.checkoutId = data.checkoutId;
-            record.status = "created";
-          } else if (!trackingId) {
-            // Fallback: single pending create (oldest by createdAt)
-            let oldest: { key: string; record: CheckoutRecord } | null = null;
-            for (const [key, record] of checkoutStore) {
-              if (record.status === "pending" && !record.checkoutId) {
-                if (!oldest || record.createdAt < oldest.record.createdAt) {
-                  oldest = { key, record };
-                }
-              }
-            }
-            if (oldest) {
-              oldest.record.checkoutId = data.checkoutId;
-              oldest.record.status = "created";
-            }
-          }
+        const { type, data } = body;
+        const trackingId = data?._reqId ?? data?.trackingId ?? data?.requestId;
+        if (!trackingId) {
+          console.warn("[webhook] No tracking id in payload, skipping");
+          return json({ received: true });
         }
 
-        if (type === "checkout.create.failure") {
-          const trackingId =
-            data?.trackingId ?? data?.requestId ?? data?._reqId;
-          const record = trackingId
-            ? checkoutStore.get(trackingId)
-            : null;
-          if (record && record.status === "pending" && !record.checkoutId) {
-            record.status = "failed";
-            record.error = data?.reason ?? "Checkout creation failed";
-          } else if (!trackingId) {
-            let oldest: { record: CheckoutRecord } | null = null;
-            for (const [, record] of checkoutStore) {
-              if (record.status === "pending" && !record.checkoutId) {
-                if (!oldest || record.createdAt < oldest.record.createdAt) {
-                  oldest = { record };
-                }
-              }
-            }
-            if (oldest) {
-              oldest.record.status = "failed";
-              oldest.record.error = data?.reason ?? "Checkout creation failed";
-            }
-          }
+        const tracking = await readOrderTrackingByTrackingId(trackingId);
+        if (!tracking) {
+          console.warn("[webhook] No order_tracking for trackingId:", trackingId);
+          return json({ received: true });
         }
 
-        if (type === "checkout.confirm.success" && data?.confirmationId && data?.checkoutId) {
-          for (const [, record] of checkoutStore) {
-            if (record.checkoutId === data.checkoutId) {
-              record.status = "confirmed";
-              record.confirmationId = data.confirmationId;
-              break;
-            }
-          }
-        }
-
-        if (type === "checkout.confirm.failure" && data?.checkoutId) {
-          for (const [, record] of checkoutStore) {
-            if (record.checkoutId === data.checkoutId) {
-              record.status = "failed";
-              record.error = data?.reason ?? "Payment confirmation failed";
-              break;
-            }
-          }
+        switch (type) {
+          case "checkout.create.success":
+            await updateOrderTracking(tracking.order_id, {
+              status: "create_success",
+              substatus: "create_success",
+              checkout_id: data?.data?.checkoutId ?? data?.checkoutId ?? undefined,
+              tracking_id: data?._reqId ?? tracking.tracking_id ?? undefined,
+            });
+            break;
+          case "checkout.create.failure":
+            await updateOrderTracking(tracking.order_id, {
+              status: "queued",
+              substatus: "create_failure",
+              checkout_id: null,
+              retry_count: (tracking.retry_count ?? 0) + 1,
+            });
+            break;
+          case "checkout.confirm.success":
+            await updateOrderTracking(tracking.order_id, {
+              status: "completed",
+              substatus: "confirm_success",
+              confirmation_id: data?.data?.confirmationId ?? data?.confirmationId ?? undefined,
+              error: null,
+            });
+            break;
+          case "checkout.confirm.failure":
+            await updateOrderTracking(tracking.order_id, {
+              status: "queued",
+              substatus: "confirm_failure",
+              checkout_id: null,
+              retry_count: (tracking.retry_count ?? 0) + 1,
+            });
+            break;
+          default:
+            console.log("[webhook] Unhandled event type:", type);
         }
 
         return json({ received: true });

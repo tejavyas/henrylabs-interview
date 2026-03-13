@@ -34,4 +34,6 @@ const Bun = {
   },
 };
 
-(globalThis as unknown as { Bun: typeof Bun }).Bun = Bun;
+if (typeof (globalThis as unknown as { Bun?: unknown }).Bun === "undefined") {
+  (globalThis as unknown as { Bun: typeof Bun }).Bun = Bun;
+}
