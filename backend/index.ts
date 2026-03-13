@@ -10,6 +10,7 @@ import {
   updateOrderTracking,
   readOrderTrackingByTrackingId,
 } from "./services/orderTracking";
+import { enqueue } from "./services/queue";
 import { getNumberEncryption } from "./utils/encryption";
 
 console.log("Backend starting...");
@@ -354,6 +355,9 @@ async function handleRequest(req: Request): Promise<Response> {
               substatus: "create_success",
               checkout_id: data?.data?.checkoutId ?? data?.checkoutId ?? undefined,
               tracking_id: data?._reqId ?? tracking.tracking_id ?? undefined,
+            });
+            enqueue(tracking.order_id).catch((e) => {
+              console.error("[webhook] send_to_payment_queue failed after checkout.create.success:", e);
             });
             break;
           case "checkout.create.failure":

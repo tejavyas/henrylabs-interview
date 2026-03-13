@@ -124,8 +124,12 @@ async function pollQueue(): Promise<void> {
       }
     }
 
-    // STEP 2: When pending, try to register webhook until it succeeds
+    // STEP 2: When pending, register webhook until it succeeds; then clear queue and wait for create webhook (webhook handler will enqueue for confirm)
     if (tracking.status === "pending") {
+      if (tracking.substatus === "webhook_registered") {
+        await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
+        return;
+      }
       const registered = await processor.webhooks.createEndpoint({
         url: webhookUrl,
         events: [
@@ -140,6 +144,10 @@ async function pollQueue(): Promise<void> {
         await updateOrderTracking(orderId, {
           retry_count: (tracking.retry_count ?? 0) + 1,
         });
+        console.log(`[${orderId}] Webhook registration failed, retry_count=${(tracking.retry_count ?? 0) + 1}`);
+      } else {
+        await updateOrderTracking(orderId, { substatus: "webhook_registered" });
+        console.log(`[${orderId}] Webhook registered (waiting for create webhook)`);
       }
       return;
     }
@@ -207,7 +215,11 @@ async function pollQueue(): Promise<void> {
       }
     }
 
-    // awaiting_webhook or other: do nothing, message will reappear
+    // awaiting_webhook: webhook will update DB when confirm result arrives; delete message so queue isn't blocked for other orders
+    if (tracking.status === "awaiting_webhook") {
+      await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
+      console.log(`[${orderId}] Awaiting webhook (confirm 202-deferred), message removed from queue`);
+    }
   } catch (e: any) {
     console.error(`[${orderId}] Worker error:`, e);
     await updateOrderTracking(orderId, {

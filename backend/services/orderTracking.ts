@@ -1,5 +1,26 @@
 import { getSupabase } from "../lib/supabase";
 
+/**
+ * order_tracking status/substatus and payment queue semantics
+ *
+ * STATUS (primary state, ordered flow):
+ *   queued → pending (create deferred) → create_success → [awaiting_webhook] → completed | failed
+ *   - queued: initial; worker will call checkout.create()
+ *   - pending: create returned 202-deferred; worker registers webhook, then we wait for create webhook
+ *   - create_success: create done (201 or webhook); worker will call checkout.confirm()
+ *   - awaiting_webhook: confirm returned 202-deferred; only webhook can move to completed
+ *   - completed | failed: terminal
+ *
+ * SUBSTATUS (granular; mixed origins):
+ *   - API response: 202-deferred, 201-immediate, 502-fraud, 503-retry, 500-error
+ *   - Internal: webhook_registered, create_failure, create_success, confirm_success, confirm_failure
+ *
+ * PAYMENT QUEUE (when a message exists for this order_id):
+ *   - Only when the worker has concrete work: create (queued/create_failure) or confirm (create_success).
+ *   - No message when we are only waiting for a webhook (pending+webhook_registered, or awaiting_webhook).
+ *   - Webhook handler enqueues on checkout.create.success so the worker runs confirm.
+ */
+
 const SELECT_COLS =
   "order_id, tracking_id, status, substatus, checkout_id, confirmation_id, error, retry_count, updated_at";
 
