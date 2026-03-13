@@ -97,6 +97,8 @@ export default function App() {
       setConfirmationId(orderId);
       setPage("confirmation");
       setCart([]);
+    } catch (e: unknown) {
+      console.error(e);
     } finally {
       setIsSubmittingOrder(false);
     }

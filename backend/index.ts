@@ -3,6 +3,7 @@ import http from "http";
 import { PaymentProcessor } from "@henrylabs-interview/payments";
 import { products } from "./products";
 import { config } from "./config";
+import { getSupabase } from "./lib/supabase";
 import { writeOrder } from "./services/orders";
 import { getNumberEncryption } from "./utils/encryption";
 
@@ -128,6 +129,15 @@ async function handleRequest(req: Request): Promise<Response> {
           amount: Math.round(amount),
           currency: currency.trim(),
         });
+        // Enqueue optimistically: don't block the response on queue write
+        getSupabase()
+          .rpc("send_to_payment_queue", { p_order_id: order.order_id })
+          .then(
+            ({ error }) => {
+              if (error) console.error("send_to_payment_queue error:", error);
+            },
+            (e: unknown) => console.error("send_to_payment_queue error:", e)
+          );
         return json({ orderId: order.order_id });
       } catch (e: any) {
         console.error("order create error:", e);
