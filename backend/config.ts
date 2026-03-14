@@ -12,6 +12,7 @@ export const config = {
   webhookSecret: process.env.HENRYLABS_WEBHOOK_SECRET ?? "whsec_virellio_2024",
   webhookBaseUrl: process.env.HENRYLABS_WEBHOOK_BASE_URL ?? `http://localhost:${PORT}`,
   port: PORT,
+  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   supabase: {
     url: process.env.SUPABASE_PROJECT_URL ?? "",
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",

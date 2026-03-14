@@ -74,7 +74,7 @@ async function withRetry<T>(
 
 // ─── CORS + JSON helpers ───
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "http://localhost:5173",
+  "Access-Control-Allow-Origin": config.corsOrigin,
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
