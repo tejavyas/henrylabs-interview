@@ -8,8 +8,8 @@ loadEnv({ path: path.join(__dirname, ".env") });
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 export const config = {
-  apiKey: process.env.HENRYLABS_API_KEY ?? "824c951e-dfac-4342-8e03",
-  webhookSecret: process.env.HENRYLABS_WEBHOOK_SECRET ?? "whsec_virellio_2024",
+  apiKey: process.env.HENRYLABS_API_KEY ?? "",
+  webhookSecret: process.env.HENRYLABS_WEBHOOK_SECRET ?? "",
   webhookBaseUrl: process.env.HENRYLABS_WEBHOOK_BASE_URL ?? `http://localhost:${PORT}`,
   port: PORT,
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",

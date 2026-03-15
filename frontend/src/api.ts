@@ -1,13 +1,7 @@
 const BASE = import.meta.env.VITE_API_URL ?? "/api";
 
 export async function fetchProducts() {
-  // #region agent log
-  fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'api.ts:fetchProducts.start',message:'fetch /api/products starting',data:{url:`${BASE}/products`},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
-  // #endregion
   const res = await fetch(`${BASE}/products`);
-  // #region agent log
-  fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'api.ts:fetchProducts.done',message:'fetch /api/products response',data:{ok:res.ok,status:res.status},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
-  // #endregion
   if (!res.ok) throw new Error("Failed to load products");
   return res.json();
 }

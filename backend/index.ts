@@ -332,8 +332,6 @@ async function handleRequest(req: Request): Promise<Response> {
           createdAt: number;
           data: Record<string, any>;
         };
-        // Log full payload to verify field names (data._reqId, data.data?.checkoutId, etc.)
-        console.log("[webhook]", JSON.stringify(body, null, 2));
 
         const { type, data } = body;
         const trackingId = data?._reqId ?? data?.trackingId ?? data?.requestId;

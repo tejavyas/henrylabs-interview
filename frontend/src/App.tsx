@@ -11,9 +11,6 @@ type CartItem = {
 };
 
 export default function App() {
-  // #region agent log
-  if (typeof fetch !== 'undefined') fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'App.tsx:render',message:'App first render',data:{},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -113,22 +110,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'App.tsx:useEffect',message:'fetchProducts called',data:{},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     fetchProducts()
-      .then((data) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'App.tsx:fetchProducts.then',message:'products loaded',data:{count:Array.isArray(data)?data.length:-1},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        setProducts(data);
-      })
-      .catch((e) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e1dcb5'},body:JSON.stringify({sessionId:'e1dcb5',location:'App.tsx:fetchProducts.catch',message:'products failed',data:{err:String(e?.message||e)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        console.error(e);
-      });
+      .then((data) => setProducts(data))
+      .catch((e) => console.error(e));
   }, []);
 
   return (

@@ -17,15 +17,10 @@ export type QueueMessage = {
  */
 export async function readMessage(sleepSeconds = 30): Promise<QueueMessage | null> {
   const supabase = getSupabase();
-  // #region agent log
   const { data, error } = await supabase.rpc("read_payment_queue", {
     v_sleep_seconds: sleepSeconds,
     v_n: 1,
   });
-  if (error) {
-    fetch('http://127.0.0.1:7437/ingest/f3a2e4ac-fced-4069-852f-95b203a709d9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'45f9fc'},body:JSON.stringify({sessionId:'45f9fc',location:'queue.ts:readMessage',message:'Supabase RPC error',data:{code:(error as any).code,message:error.message,details:(error as any).details},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-  }
-  // #endregion
 
   if (error) {
     throw new Error(`queue read failed: ${error.message}`);
