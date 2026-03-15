@@ -103,7 +103,3 @@ export async function readOrderTrackingByOrderId(orderId: string): Promise<Order
   return data as OrderTrackingRow | null;
 }
 
-export async function readOrderTrackingsByOrderId(orderId: string): Promise<OrderTrackingRow[]> {
-  const row = await readOrderTrackingByOrderId(orderId);
-  return row ? [row] : [];
-}

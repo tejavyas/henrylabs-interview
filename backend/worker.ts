@@ -1,7 +1,7 @@
 import "./bun-polyfill";
 import { PaymentProcessor } from "@henrylabs-interview/payments";
 import { config } from "./config";
-import { readOrderById } from "./services/orders";
+import { readOrderById, type OrderRow } from "./services/orders";
 import {
   readOrderTrackingByOrderId,
   updateOrderTracking,
@@ -9,6 +9,7 @@ import {
 } from "./services/orderTracking";
 import { readMessage, deleteMessage } from "./services/queue";
 import { getNumberEncryption } from "./utils/encryption";
+import { OrderStatus, Substatus } from "./constants";
 
 const MAX_RETRIES = 80;
 const POLL_INTERVAL_MS = 5000;
@@ -17,24 +18,40 @@ const QUEUE_VISIBILITY_SECONDS = 30;
 const processor = new PaymentProcessor({ apiKey: config.apiKey });
 const webhookUrl = `${config.webhookBaseUrl}/api/webhooks`;
 
-async function pollQueue(): Promise<void> {
+async function safeDeleteMessage(msgId: number): Promise<void> {
+  try {
+    await deleteMessage(msgId);
+  } catch (e) {
+    console.error("deleteMessage:", e);
+  }
+}
+
+type PollContext = {
+  msgId: number;
+  orderId: string;
+  tracking: OrderTrackingRow;
+  order: OrderRow;
+};
+
+/** Fetch one message, load tracking and order; return context or null (caller does not delete). */
+async function fetchAndValidateMessage(): Promise<PollContext | null> {
   let message: Awaited<ReturnType<typeof readMessage>> = null;
   try {
     message = await readMessage(QUEUE_VISIBILITY_SECONDS);
   } catch (e) {
     console.error("Queue read error:", e);
-    return;
+    return null;
   }
 
-  if (!message) return;
+  if (!message) return null;
 
   const orderId = message.message?.order_id;
   const msgId = message.msg_id;
 
   if (!orderId) {
     console.warn("Message missing order_id, deleting");
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-    return;
+    await safeDeleteMessage(msgId);
+    return null;
   }
 
   let tracking: OrderTrackingRow | null = null;
@@ -42,188 +59,258 @@ async function pollQueue(): Promise<void> {
     tracking = await readOrderTrackingByOrderId(orderId);
   } catch (e) {
     console.error(`[${orderId}] readOrderTrackingByOrderId error:`, e);
-    return;
+    return null;
   }
 
   if (!tracking) {
     console.warn(`[${orderId}] No order_tracking row, deleting message`);
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-    return;
+    await safeDeleteMessage(msgId);
+    return null;
   }
 
-  // Terminal: already completed or failed
-  if (tracking.status === "completed") {
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-    return;
+  if (
+    tracking.status === OrderStatus.COMPLETED ||
+    tracking.status === OrderStatus.FAILED
+  ) {
+    await safeDeleteMessage(msgId);
+    return null;
   }
-  if (tracking.status === "failed") {
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-    return;
-  }
+
   if ((tracking.retry_count ?? 0) >= MAX_RETRIES) {
     await updateOrderTracking(orderId, {
-      status: "failed",
+      status: OrderStatus.FAILED,
       error: `Exhausted ${MAX_RETRIES} retries`,
     });
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-    return;
+    await safeDeleteMessage(msgId);
+    return null;
   }
 
-  let order = null;
+  let order: OrderRow | null = null;
   try {
     order = await readOrderById(orderId);
   } catch (e) {
     console.error(`[${orderId}] readOrderById error:`, e);
-    return;
+    return null;
   }
+
   if (!order) {
     console.warn(`[${orderId}] Order not found, deleting message`);
-    await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
+    await safeDeleteMessage(msgId);
+    return null;
+  }
+
+  return { msgId, orderId, tracking, order };
+}
+
+/** Run checkout.create(); returns updated tracking if 201-immediate (so caller can run confirm in same tick). */
+async function handleCheckoutCreate(
+  orderId: string,
+  tracking: OrderTrackingRow,
+  order: OrderRow
+): Promise<OrderTrackingRow | null> {
+  const result = await processor.checkout.create({
+    amount: order.amount,
+    currency: order.currency as "USD" | "EUR" | "JPY",
+  });
+
+  if (
+    result.status === "success" &&
+    result.substatus === Substatus.IMMEDIATE_201 &&
+    result.data
+  ) {
+    await updateOrderTracking(orderId, {
+      checkout_id: result.data.checkoutId,
+      tracking_id: result._reqId,
+      status: OrderStatus.CREATE_SUCCESS,
+      substatus: Substatus.IMMEDIATE_201,
+    });
+    return {
+      ...tracking,
+      checkout_id: result.data.checkoutId,
+      tracking_id: result._reqId,
+      status: OrderStatus.CREATE_SUCCESS,
+      substatus: Substatus.IMMEDIATE_201,
+    };
+  }
+
+  if (
+    result.status === "success" &&
+    result.substatus === Substatus.DEFERRED_202
+  ) {
+    await updateOrderTracking(orderId, {
+      tracking_id: result._reqId,
+      status: OrderStatus.PENDING,
+      substatus: Substatus.DEFERRED_202,
+      checkout_id: null,
+    });
+    return null;
+  }
+
+  await updateOrderTracking(orderId, {
+    error: result.message,
+    retry_count: (tracking.retry_count ?? 0) + 1,
+    substatus: result.status === "failure" ? result.substatus : undefined,
+  });
+  return null;
+}
+
+async function handlePendingWebhook(
+  orderId: string,
+  tracking: OrderTrackingRow,
+  msgId: number
+): Promise<void> {
+  if (tracking.substatus === Substatus.WEBHOOK_REGISTERED) {
+    await safeDeleteMessage(msgId);
+    return;
+  }
+  const registered = await processor.webhooks.createEndpoint({
+    url: webhookUrl,
+    events: [
+      "checkout.create.success",
+      "checkout.create.failure",
+      "checkout.confirm.success",
+      "checkout.confirm.failure",
+    ],
+    secret: config.webhookSecret,
+  });
+  if (!registered) {
+    await updateOrderTracking(orderId, {
+      retry_count: (tracking.retry_count ?? 0) + 1,
+    });
+    console.log(
+      `[${orderId}] Webhook registration failed, retry_count=${(tracking.retry_count ?? 0) + 1}`
+    );
+  } else {
+    await updateOrderTracking(orderId, {
+      substatus: Substatus.WEBHOOK_REGISTERED,
+    });
+    console.log(`[${orderId}] Webhook registered (waiting for create webhook)`);
+  }
+}
+
+async function handleCheckoutConfirm(
+  orderId: string,
+  tracking: OrderTrackingRow,
+  order: OrderRow,
+  msgId: number
+): Promise<void> {
+  let number: string;
+  try {
+    number = getNumberEncryption().decrypt(order.credit_card_number);
+  } catch (e) {
+    console.error(`[${orderId}] Card decryption failed:`, e);
+    await updateOrderTracking(orderId, { error: "Card decryption failed" });
     return;
   }
 
-  try {
-    // STEP 1: checkout.create() when we don't have a checkout yet
-    if (!tracking.checkout_id && (tracking.status === "queued" || tracking.substatus === "create_failure")) {
-      const result = await processor.checkout.create({
-        amount: order.amount,
-        currency: order.currency as "USD" | "EUR" | "JPY",
-      });
+  const result = await processor.checkout.confirm({
+    checkoutId: tracking.checkout_id!,
+    type: "raw-card",
+    data: {
+      number,
+      expMonth: order.expiration_month,
+      expYear: order.expiration_year,
+      cvc: order.cvv,
+    },
+  });
 
-      if (result.status === "success" && result.substatus === "201-immediate" && result.data) {
-        await updateOrderTracking(orderId, {
-          checkout_id: result.data.checkoutId,
-          tracking_id: result._reqId,
-          status: "create_success",
-          substatus: "201-immediate",
-        });
-        // Fall through: run confirm in same run (tracking now has checkout_id in DB; we'll use result below)
-        tracking = {
-          ...tracking,
-          checkout_id: result.data.checkoutId,
-          tracking_id: result._reqId,
-          status: "create_success",
-          substatus: "201-immediate",
-        } as OrderTrackingRow;
-      } else if (result.status === "success" && result.substatus === "202-deferred") {
-        await updateOrderTracking(orderId, {
-          tracking_id: result._reqId,
-          status: "pending",
-          substatus: "202-deferred",
-          checkout_id: null,
-        });
-        return;
-      } else {
-        // Failure: 502-fraud, 503-retry, etc.
-        await updateOrderTracking(orderId, {
-          error: result.message,
-          retry_count: (tracking.retry_count ?? 0) + 1,
-          substatus: result.status === "failure" ? result.substatus : undefined,
-        });
-        return;
-      }
+  if (
+    result.status === "success" &&
+    result.substatus === Substatus.IMMEDIATE_201 &&
+    result.data
+  ) {
+    await updateOrderTracking(orderId, {
+      status: OrderStatus.COMPLETED,
+      substatus: Substatus.IMMEDIATE_201,
+      confirmation_id: result.data.confirmationId,
+      error: null,
+    });
+    await safeDeleteMessage(msgId);
+    console.log(`[${orderId}] Completed (201-immediate)`);
+    return;
+  }
+
+  if (
+    result.status === "success" &&
+    result.substatus === Substatus.DEFERRED_202
+  ) {
+    await updateOrderTracking(orderId, {
+      status: OrderStatus.AWAITING_WEBHOOK,
+      substatus: Substatus.DEFERRED_202,
+      tracking_id: result._reqId,
+    });
+    return;
+  }
+
+  if (result.status === "failure") {
+    if (
+      result.substatus === Substatus.FRAUD_502 ||
+      result.substatus === Substatus.RETRY_503
+    ) {
+      await updateOrderTracking(orderId, {
+        substatus: result.substatus,
+        error: result.message,
+        retry_count: (tracking.retry_count ?? 0) + 1,
+      });
+      return;
     }
+    await updateOrderTracking(orderId, {
+      status: OrderStatus.FAILED,
+      substatus: Substatus.ERROR_500,
+      error: result.message,
+    });
+    await safeDeleteMessage(msgId);
+  }
+}
 
-    // STEP 2: When pending, register webhook until it succeeds; then clear queue and wait for create webhook (webhook handler will enqueue for confirm)
-    if (tracking.status === "pending") {
-      if (tracking.substatus === "webhook_registered") {
-        await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-        return;
-      }
-      const registered = await processor.webhooks.createEndpoint({
-        url: webhookUrl,
-        events: [
-          "checkout.create.success",
-          "checkout.create.failure",
-          "checkout.confirm.success",
-          "checkout.confirm.failure",
-        ],
-        secret: config.webhookSecret,
-      });
-      if (!registered) {
-        await updateOrderTracking(orderId, {
-          retry_count: (tracking.retry_count ?? 0) + 1,
-        });
-        console.log(`[${orderId}] Webhook registration failed, retry_count=${(tracking.retry_count ?? 0) + 1}`);
-      } else {
-        await updateOrderTracking(orderId, { substatus: "webhook_registered" });
-        console.log(`[${orderId}] Webhook registered (waiting for create webhook)`);
+function handleAwaitingWebhook(orderId: string, msgId: number): Promise<void> {
+  return safeDeleteMessage(msgId).then(() => {
+    console.log(
+      `[${orderId}] Awaiting webhook (confirm 202-deferred), message removed from queue`
+    );
+  });
+}
+
+async function pollQueue(): Promise<void> {
+  const ctx = await fetchAndValidateMessage();
+  if (!ctx) return;
+
+  const { msgId, orderId, tracking, order } = ctx;
+
+  try {
+    const needsCreate =
+      !tracking.checkout_id &&
+      (tracking.status === OrderStatus.QUEUED ||
+        tracking.substatus === Substatus.CREATE_FAILURE);
+
+    if (needsCreate) {
+      const updated = await handleCheckoutCreate(orderId, tracking, order);
+      if (updated) {
+        await handleCheckoutConfirm(orderId, updated, order, msgId);
       }
       return;
     }
 
-    // STEP 3: checkout.confirm() when we have create_success and checkout_id
-    if (tracking.status === "create_success" && tracking.checkout_id) {
-      let number: string;
-      try {
-        number = getNumberEncryption().decrypt(order.credit_card_number);
-      } catch (e) {
-        console.error(`[${orderId}] Card decryption failed:`, e);
-        await updateOrderTracking(orderId, { error: "Card decryption failed" });
-        return;
-      }
-
-      const result = await processor.checkout.confirm({
-        checkoutId: tracking.checkout_id,
-        type: "raw-card",
-        data: {
-          number,
-          expMonth: order.expiration_month,
-          expYear: order.expiration_year,
-          cvc: order.cvv,
-        },
-      });
-
-      if (result.status === "success" && result.substatus === "201-immediate" && result.data) {
-        await updateOrderTracking(orderId, {
-          status: "completed",
-          substatus: "201-immediate",
-          confirmation_id: result.data.confirmationId,
-          error: null,
-        });
-        await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-        console.log(`[${orderId}] Completed (201-immediate)`);
-        return;
-      }
-
-      if (result.status === "success" && result.substatus === "202-deferred") {
-        await updateOrderTracking(orderId, {
-          status: "awaiting_webhook",
-          substatus: "202-deferred",
-          tracking_id: result._reqId,
-        });
-        return;
-      }
-
-      if (result.status === "failure") {
-        if (result.substatus === "502-fraud" || result.substatus === "503-retry") {
-          await updateOrderTracking(orderId, {
-            substatus: result.substatus,
-            error: result.message,
-            retry_count: (tracking.retry_count ?? 0) + 1,
-          });
-          return;
-        }
-        // 500-error
-        await updateOrderTracking(orderId, {
-          status: "failed",
-          substatus: "500-error",
-          error: result.message,
-        });
-        await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-        return;
-      }
+    if (tracking.status === OrderStatus.PENDING) {
+      await handlePendingWebhook(orderId, tracking, msgId);
+      return;
     }
 
-    // awaiting_webhook: webhook will update DB when confirm result arrives; delete message so queue isn't blocked for other orders
-    if (tracking.status === "awaiting_webhook") {
-      await deleteMessage(msgId).catch((e) => console.error("deleteMessage:", e));
-      console.log(`[${orderId}] Awaiting webhook (confirm 202-deferred), message removed from queue`);
+    if (
+      tracking.status === OrderStatus.CREATE_SUCCESS &&
+      tracking.checkout_id
+    ) {
+      await handleCheckoutConfirm(orderId, tracking, order, msgId);
+      return;
     }
-  } catch (e: any) {
+
+    if (tracking.status === OrderStatus.AWAITING_WEBHOOK) {
+      await handleAwaitingWebhook(orderId, msgId);
+    }
+  } catch (e: unknown) {
     console.error(`[${orderId}] Worker error:`, e);
     await updateOrderTracking(orderId, {
-      error: e?.message ?? "Worker error",
+      error: e instanceof Error ? e.message : "Worker error",
       retry_count: (tracking.retry_count ?? 0) + 1,
     }).catch((err) => console.error("updateOrderTracking:", err));
   }

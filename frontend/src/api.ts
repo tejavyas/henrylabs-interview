@@ -8,36 +8,6 @@ export async function fetchProducts(): Promise<Product[]> {
   return res.json();
 }
 
-export async function createCheckout(params: {
-  amount: number;
-  currency: string;
-  customerId?: string;
-}) {
-  const res = await fetch(`${BASE}/checkout/create`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
-  return res.json();
-}
-
-export async function confirmCheckout(params: {
-  checkoutId: string;
-  paymentToken: string;
-}) {
-  const res = await fetch(`${BASE}/checkout/confirm`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
-  return res.json();
-}
-
-export async function pollCheckoutStatus(trackingId: string) {
-  const res = await fetch(`${BASE}/checkout/status/${trackingId}`);
-  return res.json();
-}
-
 export async function createOrder(params: {
   fullName: string;
   email: string;

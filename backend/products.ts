@@ -1,3 +1,4 @@
+/** Shape must stay in sync with frontend/src/types.ts Product. */
 export interface Product {
     id: number;
     name: string;
