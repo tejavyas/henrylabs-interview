@@ -1,6 +1,8 @@
+import type { Product } from "./types";
+
 const BASE = import.meta.env.VITE_API_URL ?? "/api";
 
-export async function fetchProducts() {
+export async function fetchProducts(): Promise<Product[]> {
   const res = await fetch(`${BASE}/products`);
   if (!res.ok) throw new Error("Failed to load products");
   return res.json();

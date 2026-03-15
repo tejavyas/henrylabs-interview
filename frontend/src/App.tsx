@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { type Product, formatPrice } from "./types";
+import { type Product, type CardState, formatPrice } from "./types";
 import { fetchProducts, createOrder } from "./api";
 import {
   type CartItem,
@@ -15,7 +15,7 @@ import { CheckoutForm } from "./components/CheckoutForm";
 
 type Page = "shop" | "checkout" | "confirmation";
 
-const initialCardState = {
+const initialCardState: CardState = {
   cardNumber: "",
   cardExpiryMonth: "",
   cardExpiryYear: "",
@@ -31,8 +31,9 @@ export default function App() {
   const [confirmationId, setConfirmationId] = useState<string | null>(null);
   const [checkoutName, setCheckoutName] = useState("");
   const [checkoutEmail, setCheckoutEmail] = useState("");
-  const [checkoutCard, setCheckoutCard] = useState(initialCardState);
+  const [checkoutCard, setCheckoutCard] = useState<CardState>(initialCardState);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
   const addToCart = useCallback((product: Product) => {
     setCart((prev) => addItem(prev, product));
@@ -65,6 +66,7 @@ export default function App() {
     const year = parseInt(checkoutCard.cardExpiryYear, 10);
 
     setIsSubmittingOrder(true);
+    setOrderError(null);
     try {
       const { orderId } = await createOrder({
         fullName: checkoutName.trim(),
@@ -80,19 +82,12 @@ export default function App() {
       setPage("confirmation");
       setCart([]);
     } catch (e: unknown) {
-      console.error(e);
+      const message = e instanceof Error ? e.message : "Failed to place order";
+      setOrderError(message);
     } finally {
       setIsSubmittingOrder(false);
     }
-  }, [
-    totalsByCurrency,
-    checkoutName,
-    checkoutEmail,
-    checkoutCard.cardNumber,
-    checkoutCard.cardExpiryMonth,
-    checkoutCard.cardExpiryYear,
-    checkoutCard.cardCvv,
-  ]);
+  }, [totalsByCurrency, checkoutName, checkoutEmail, checkoutCard]);
 
   const goToShop = useCallback(() => {
     setPage("shop");
@@ -100,12 +95,15 @@ export default function App() {
     setCheckoutName("");
     setCheckoutEmail("");
     setCheckoutCard(initialCardState);
+    setOrderError(null);
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     fetchProducts()
-      .then((data) => setProducts(data))
-      .catch((e) => console.error(e));
+      .then((data) => { if (!cancelled) setProducts(data); })
+      .catch((e) => { if (!cancelled) console.error(e); });
+    return () => { cancelled = true; };
   }, []);
 
   return (
@@ -147,6 +145,7 @@ export default function App() {
             onCardChange={(patch) => setCheckoutCard((c) => ({ ...c, ...patch }))}
             onSubmit={submitOrder}
             isSubmitting={isSubmittingOrder}
+            error={orderError}
           />
         )}
 
@@ -200,12 +199,13 @@ type CheckoutPageProps = {
   onBack: () => void;
   name: string;
   email: string;
-  card: { cardNumber: string; cardExpiryMonth: string; cardExpiryYear: string; cardCvv: string };
+  card: CardState;
   onNameChange: (v: string) => void;
   onEmailChange: (v: string) => void;
-  onCardChange: (patch: Partial<CheckoutPageProps["card"]>) => void;
+  onCardChange: (patch: Partial<CardState>) => void;
   onSubmit: () => void;
   isSubmitting: boolean;
+  error: string | null;
 };
 
 function CheckoutPage({
@@ -218,6 +218,7 @@ function CheckoutPage({
   onCardChange,
   onSubmit,
   isSubmitting,
+  error,
 }: CheckoutPageProps) {
   return (
     <div className="checkout-page">
@@ -234,6 +235,7 @@ function CheckoutPage({
         onCardChange={onCardChange}
         onSubmit={onSubmit}
         isSubmitting={isSubmitting}
+        error={error}
       />
     </div>
   );

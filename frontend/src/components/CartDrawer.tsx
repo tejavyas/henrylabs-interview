@@ -27,7 +27,7 @@ export function CartDrawer({
       <div
         className={`drawer-overlay ${open ? "open" : ""}`}
         onClick={onClose}
-        aria-hidden
+        aria-hidden="true"
       />
       <div className={`drawer ${open ? "open" : ""}`} role="dialog" aria-label="Cart">
         <div className="drawer-header">

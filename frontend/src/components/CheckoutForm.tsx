@@ -1,9 +1,4 @@
-type CardState = {
-  cardNumber: string;
-  cardExpiryMonth: string;
-  cardExpiryYear: string;
-  cardCvv: string;
-};
+import type { CardState } from "../types";
 
 type Props = {
   name: string;
@@ -14,6 +9,7 @@ type Props = {
   onCardChange: (patch: Partial<CardState>) => void;
   onSubmit: () => void;
   isSubmitting: boolean;
+  error: string | null;
 };
 
 const fieldStyle = { display: "flex", flexDirection: "column" as const, gap: "0.25rem" };
@@ -30,9 +26,15 @@ export function CheckoutForm({
   onCardChange,
   onSubmit,
   isSubmitting,
+  error,
 }: Props) {
   return (
     <div className="checkout-form" style={{ maxWidth: 480, marginTop: "1.5rem" }}>
+      {error && (
+        <div className="checkout-form-error" role="alert" style={{ marginBottom: "1rem", color: "var(--error, #c00)" }}>
+          {error}
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
         <label style={fieldStyle}>
           <span>Name</span>
