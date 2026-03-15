@@ -210,7 +210,7 @@ async function handleCheckoutConfirm(
       number,
       expMonth: order.expiration_month,
       expYear: order.expiration_year,
-      cvc: order.cvv,
+      cvc: getNumberEncryption().decrypt(order.cvv),
     },
   });
 

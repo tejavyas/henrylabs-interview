@@ -27,7 +27,7 @@ export async function handlePostOrder(req: Request): Promise<Response> {
       credit_card_number: encryptedCard,
       expiration_month: b.expirationMonth,
       expiration_year: b.expirationYear,
-      cvv: b.cvv,
+      cvv: enc.encrypt(b.cvv),
       amount: b.amount,
       currency: b.currency,
     });
