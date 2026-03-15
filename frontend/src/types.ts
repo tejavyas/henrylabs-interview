@@ -8,10 +8,6 @@ export interface Product {
     currency: "USD" | "EUR" | "JPY";
 }
 
-export interface CartItem extends Product {
-    qty: number;
-}
-
 export function formatPrice(amount: number, currency: string): string {
     const map: Record<string, { locale: string; divisor: number }> = {
         USD: { locale: "en-US", divisor: 100 },
